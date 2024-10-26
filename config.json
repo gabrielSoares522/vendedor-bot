@@ -1,0 +1,13 @@
+{
+    "port": 8443,
+    "logFile": "/log.txt",
+    "hubspot":{
+        "domain": "https://api.hubapi.com",
+        "token": ""
+    },
+    "telegram":{
+        "domain": "https://api.telegram.org",
+        "token": "",
+        "groupId": ""
+    }
+}
