@@ -1,6 +1,7 @@
 import logRegister from "./services/LogRegister.js"
 import Telegram from "./services/Telegram.js"
 import Hubspot from "./services/Hubspot.js"
+import Validate from "./services/Validate.js"
 import express from "express"
 import bodyParser from 'body-parser'
 import * as config from './config.json' with { type: "json" }
@@ -21,7 +22,8 @@ app.post("/webhook", async function (req, res){
     try{
         let telegram = new Telegram(telegramToken, telegramDomain)
         let hubspot = new Hubspot(hubspotToken, hubspotDomain)
-        
+        let validate = new Validate()
+
         const userId= req.body.message.from.id
         const username = req.body.message.from.username
         const messageText = req.body.message.text
@@ -34,7 +36,7 @@ app.post("/webhook", async function (req, res){
         if(status ==200){
             if(data.total == 0){
                 //ask CPF
-                if(!validCPF(messageText)){
+                if(!validate.cpf(messageText)){
                     await telegram.sendMessage(userId,"Informe o seu CPF.")
                 }else{
                     let resultContactCPF = await hubspot.search("contacts", "cpf", messageText, ["assinatura_ativa"])
@@ -76,131 +78,129 @@ app.post("/webhook", async function (req, res){
                 let userPhone = data.results[0].properties.phone
                 let isUserActive = data.results[0].properties.assinatura_ativa
 
-                if(isUserActive == "sim")
-                {
-                    
-                switch(messageText) {
-                    case "1":
-                    case "realizar pedido":
-                        await hubspot.update(contactId,"contacts",[{"name":"bot_etapa", "value":1}])
-                        await telegram.sendMessage(userId,"Descreva de forma clara o que está procurando.")
-                        break
-                    case "2":
-                    case "encerrar pedido":
-                        await hubspot.update(contactId,"contacts",[{"name":"bot_etapa", "value":2}])
-                        await telegram.sendMessage(userId,"Informe o codigo do pedido que deseja encerrar.")
-                        break
-                    case "3":
-                    case "Negociar com comprador":
-                        await hubspot.update(contactId,"contacts",[{"name":"bot_etapa", "value":3}])
-                        await telegram.sendMessage(userId,"Informe o codigo do pedido que deseja negociar.")
-                        break
-                    default:
-                        switch(etapa) {
-                            case "1":
-                                //save deal
-                                let dealProperties = [
-                                    {"name": "dealname", "value": messageText},
-                                    {"name": "dealstage", "value": "qualifiedtobuy"},
-                                    {"name": "pipeline", "value": "default" }
-                                ]
-                                
-                                let resultDeal = await hubspot.save("deals",dealProperties)
-                                
-                                if(resultDeal.status == 201){
-                                    let dealId = resultDeal.data.id
-                                    //associate to contact
-                                    let resultAssociation = await hubspot.associate(dealId,contactId,3)
+                if(isUserActive == "sim") {
+                    switch(messageText) {
+                        case "1":
+                        case "realizar pedido":
+                            await hubspot.update(contactId,"contacts",[{"name":"bot_etapa", "value":1}])
+                            await telegram.sendMessage(userId,"Descreva de forma clara o que está procurando.")
+                            break
+                        case "2":
+                        case "encerrar pedido":
+                            await hubspot.update(contactId,"contacts",[{"name":"bot_etapa", "value":2}])
+                            await telegram.sendMessage(userId,"Informe o codigo do pedido que deseja encerrar.")
+                            break
+                        case "3":
+                        case "Negociar com comprador":
+                            await hubspot.update(contactId,"contacts",[{"name":"bot_etapa", "value":3}])
+                            await telegram.sendMessage(userId,"Informe o codigo do pedido que deseja negociar.")
+                            break
+                        default:
+                            switch(etapa) {
+                                case "1":
+                                    //save deal
+                                    let dealProperties = [
+                                        {"name": "dealname", "value": messageText},
+                                        {"name": "dealstage", "value": "qualifiedtobuy"},
+                                        {"name": "pipeline", "value": "default" }
+                                    ]
+                                    
+                                    let resultDeal = await hubspot.save("deals",dealProperties)
+                                    
+                                    if(resultDeal.status == 201){
+                                        let dealId = resultDeal.data.id
+                                        //associate to contact
+                                        let resultAssociation = await hubspot.associate(dealId,contactId,3)
 
-                                    if(resultAssociation.status == 204)
-                                    {
-                                        //send message to group
-                                        let resultSendGroup = await telegram.sendMessage(groupId,"codigo: "+dealId+"\nBuscando: "+messageText)
-                                        
-                                        let message_id = resultSendGroup.data.result.message_id
+                                        if(resultAssociation.status == 204)
+                                        {
+                                            //send message to group
+                                            let resultSendGroup = await telegram.sendMessage(groupId,"codigo: "+dealId+"\nBuscando: "+messageText)
+                                            
+                                            let message_id = resultSendGroup.data.result.message_id
 
-                                        //update deal with message_id
-                                        let resultMessageId = await hubspot.update(dealId,"deals",[{"name":"mensagem_id", "value": message_id}])    
-                                        let statusMessageId = resultMessageId.status
+                                            //update deal with message_id
+                                            let resultMessageId = await hubspot.update(dealId,"deals",[{"name":"mensagem_id", "value": message_id}])    
+                                            let statusMessageId = resultMessageId.status
 
-                                        if(statusMessageId == 200){
-                                            //send message with code to user
-                                            await telegram.sendMessage(userId,"seu pedido foi salvo com o codigo "+dealId)
+                                            if(statusMessageId == 200){
+                                                //send message with code to user
+                                                await telegram.sendMessage(userId,"seu pedido foi salvo com o codigo "+dealId)
+                                            }else{
+                                                await telegram.sendMessage(userId,"Infelizmente ocorreu um erro tente novamente mais tarde.")
+
+                                            }
                                         }else{
+                                            
                                             await telegram.sendMessage(userId,"Infelizmente ocorreu um erro tente novamente mais tarde.")
-
-                                        }
-                                    }else{
-                                        
-                                        await telegram.sendMessage(userId,"Infelizmente ocorreu um erro tente novamente mais tarde.")
-                                    }
-                                }
-                                break
-                            case "2":
-                                //verify if deal exists or is from user
-                                //ps:. get te message id to
-                                let resultDealFound = await hubspot.search("deals", "hs_object_id", messageText,["mensagem_id"])
-                                let statusDeal = resultDealFound.status
-                                let dataDeal = resultDealFound.data
-                                
-                                if(statusDeal == 200){
-                                    if(dataDeal.total !=0){
-                                        let messageId = dataDeal.results[0].mensagem_id
-
-                                        //close deal
-                                        let resultCloseDeal = await hubspot.update(messageText,"deals",[{"name":"dealstage","value":"closedwon"}])
-                                        
-                                        let statusCloseDeal = resultCloseDeal.status
-                                        if(statusCloseDeal == 200){
-                                            //delete messsage on group
-                                            await telegram.deleteMessage(groupId,messageId)
-
-                                            await telegram.sendMessage(userId,"O pedido foi encerrado com sucesso.")
                                         }
                                     }
-                                    else{
-                                        await telegram.sendMessage(userId,"Não encontramos o codigo informado.")
-                                    }
-                                }
-                                break
-                            case "3":
-                                //let resultDealFound3 = await hubspot.search("deals", "hs_object_id", messageText, ["hs_contact_id"])
-                                let resultDealFound3 = await hubspot.getAssociated("deals",messageText,"contacts")
-                                let statusDeal3 = resultDealFound3.status
-                                let dataDeal3 = resultDealFound3.data
-                                
-                                if(statusDeal3 == 200){
-                                    if(dataDeal3.results.length > 0){
-                                        let buyerId = dataDeal3.results[0].id
+                                    break
+                                case "2":
+                                    //verify if deal exists or is from user
+                                    //ps:. get te message id to
+                                    let resultDealFound = await hubspot.search("deals", "hs_object_id", messageText,["mensagem_id"])
+                                    let statusDeal = resultDealFound.status
+                                    let dataDeal = resultDealFound.data
+                                    
+                                    if(statusDeal == 200){
+                                        if(dataDeal.total !=0){
+                                            let messageId = dataDeal.results[0].mensagem_id
 
-                                        let resultBuyerFound = await hubspot.search("contacts", "hs_object_id", buyerId, ["telegram_id"])
-                                        let statusBuyerFound = resultBuyerFound.status
-                                        let dataBuyerFound = resultBuyerFound.data
+                                            //close deal
+                                            let resultCloseDeal = await hubspot.update(messageText,"deals",[{"name":"dealstage","value":"closedwon"}])
+                                            
+                                            let statusCloseDeal = resultCloseDeal.status
+                                            if(statusCloseDeal == 200){
+                                                //delete messsage on group
+                                                await telegram.deleteMessage(groupId,messageId)
 
-                                        if(statusBuyerFound == 200){
-                                            if(dataBuyerFound.total != 0){
-                                                let buyerChatId = dataBuyerFound.results[0].properties.telegram_id
-                                                
-                                                await telegram.sendMessage(buyerChatId,"Um dos membros do grupo deseja negociar com você.")
-                                                await telegram.sendContact(buyerChatId,userPhone,firstName,lastName)
-                                                await telegram.sendMessage(userId,"Enviamos uma notificação para comprador.")
+                                                await telegram.sendMessage(userId,"O pedido foi encerrado com sucesso.")
                                             }
                                         }
+                                        else{
+                                            await telegram.sendMessage(userId,"Não encontramos o codigo informado.")
+                                        }
                                     }
-                                    else{
-                                        await telegram.sendMessage(userId,"Não encontramos o codigo informado.")
+                                    break
+                                case "3":
+                                    //let resultDealFound3 = await hubspot.search("deals", "hs_object_id", messageText, ["hs_contact_id"])
+                                    let resultDealFound3 = await hubspot.getAssociated("deals",messageText,"contacts")
+                                    let statusDeal3 = resultDealFound3.status
+                                    let dataDeal3 = resultDealFound3.data
+                                    
+                                    if(statusDeal3 == 200){
+                                        if(dataDeal3.results.length > 0){
+                                            let buyerId = dataDeal3.results[0].id
+
+                                            let resultBuyerFound = await hubspot.search("contacts", "hs_object_id", buyerId, ["telegram_id"])
+                                            let statusBuyerFound = resultBuyerFound.status
+                                            let dataBuyerFound = resultBuyerFound.data
+
+                                            if(statusBuyerFound == 200){
+                                                if(dataBuyerFound.total != 0){
+                                                    let buyerChatId = dataBuyerFound.results[0].properties.telegram_id
+                                                    
+                                                    await telegram.sendMessage(buyerChatId,"Um dos membros do grupo deseja negociar com você.")
+                                                    await telegram.sendContact(buyerChatId,userPhone,firstName,lastName)
+                                                    await telegram.sendMessage(userId,"Enviamos uma notificação para comprador.")
+                                                }
+                                            }
+                                        }
+                                        else{
+                                            await telegram.sendMessage(userId,"Não encontramos o codigo informado.")
+                                        }
                                     }
-                                }
-                                break
-                            case "0":
-                            default:
-                                await telegram.sendMessage(userId,"O que deseja fazer?\n1. Realizar Pedido\n2. Encerrar Pedido\n3. Negociar com comrpador")
-                                break
-                        }
-                        
-                        await hubspot.update(contactId,"contacts",[{"name":"bot_etapa", "value":0}])
-                        break
-                }
+                                    break
+                                case "0":
+                                default:
+                                    await telegram.sendMessage(userId,"O que deseja fazer?\n1. Realizar Pedido\n2. Encerrar Pedido\n3. Negociar com comrpador")
+                                    break
+                            }
+                            
+                            await hubspot.update(contactId,"contacts",[{"name":"bot_etapa", "value":0}])
+                            break
+                    }
                 }else{
                     await telegram.sendMessage(userId,"Infelizmente a sua assinatura foi cancelada.")
                 }
@@ -219,11 +219,3 @@ app.post("/webhook", async function (req, res){
 app.listen(port, function () {
     console.log("App de Exemplo escutando na porta "+port+"!")
 })
-
-function validCPF(cpf){
-    if(isNaN(cpf) == true){
-        return false
-    }else{
-        return cpf.length==11
-    }
-}
